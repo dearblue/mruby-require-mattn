@@ -12,10 +12,11 @@ end
 MRuby::Lockfile.disable rescue nil # for development
 
 MRuby::Build.new do |conf|
-  toolchain :clang
-  conf.enable_debug
+  toolchain
+  #conf.enable_debug
   conf.enable_test
-  conf.cc.flags << ["-fPIC"]
+  conf.enable_bintest
+  conf.cc.flags << ["-fPIC"] unless ENV['VisualStudioVersion'] || ENV['VSINSTALLDIR']
   conf.gembox 'default'
   conf.gem File.dirname(File.expand_path(__FILE__))
 end

@@ -7,9 +7,9 @@ on:
     branches: "*"
 
 jobs:
-  ubuntu-22-04:
-    runs-on: ubuntu-latest
-    name: ubuntu-latest (mruby-${{ matrix.TARGET_MRUBY }})
+  general:
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.platform }} (mruby-${{ matrix.TARGET_MRUBY }})
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -19,17 +19,48 @@ jobs:
         - 3.2.0
         - 3.1.0
         - 3.0.0
+        platform:
+        - Ubuntu-22.04 with clang
+        - Windows-2022 with MinGW
+        - Windows-2022 with VisualStudio
+        include:
+        - { platform: Ubuntu-22.04 with clang, os: ubuntu-22.04, cc: clang }
+        - { platform: Windows-2022 with MinGW, os: windows-2022, cc: gcc }
+        - { platform: Windows-2022 with VisualStudio, os: windows-2022 }
     env:
       MRUBY_URL: "https://github.com/mruby/mruby/archive/${{ matrix.TARGET_MRUBY }}.tar.gz"
       MRUBY_DIR: "mruby-${{ matrix.TARGET_MRUBY }}"
-      MRUBY_CONFIG: "run_test.rb"
+      MRUBY_CONFIG: "../run_test.rb"
     steps:
     - uses: actions/checkout@v3
+    - name: chocolatey (for windows)
+      if: "matrix.os == 'windows-2022'"
+      run: choco install -y wget tartool
     - name: fetch and extract mruby
-      run: wget -O- $MRUBY_URL | tar xzf -
+      shell: sh
+      run: wget -O- ${{ env.MRUBY_URL }} | tar xzf -
     - name: pre-clean
-      run: rake -vf $MRUBY_DIR/Rakefile clean
+      run: |
+        cd ${{ env.MRUBY_DIR }}
+        rake -v clean
     - name: build
-      run: rake -mvf $MRUBY_DIR/Rakefile test:build || rake -mvf $MRUBY_DIR/Rakefile || rake -vf $MRUBY_DIR/Rakefile
+      if: matrix.cc
+      env:
+        CC: ${{ matrix.cc }}
+      run: |
+        cd ${{ env.MRUBY_DIR }}
+        rake -mv test:build || rake -mv || rake -v
     - name: test
-      run: rake -vf $MRUBY_DIR/Rakefile test
+      if: matrix.cc
+      env:
+        CC: ${{ matrix.cc }}
+      run: |
+        cd ${{ env.MRUBY_DIR }}
+        rake -v test
+    - name: build and test (with VC)
+      if: "!matrix.cc"
+      shell: cmd
+      run: |
+        cd ${{ env.MRUBY_DIR }}
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        rake test
