@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <limits.h>
 #if defined(_MSC_VER) || defined(__MINGW32__)
@@ -188,6 +189,15 @@ find_file_check(mrb_state *mrb, mrb_value path, mrb_value fname, mrb_value ext)
     return mrb_nil_value();
   }
   debug("fpath: %s\n", fpath);
+
+#if defined(S_ISDIR)
+  {
+    struct stat st;
+    if (stat(fpath, &st) || S_ISDIR(st.st_mode)) {
+      return mrb_nil_value();
+    }
+  }
+#endif
 
   fp = fopen(fpath, "r");
   if (fp == NULL) {
