@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <limits.h>
 #if defined(_MSC_VER) || defined(__MINGW32__)
@@ -78,6 +79,9 @@ realpath(const char *path, char *resolved_path) {
   GetFullPathNameA(path, PATH_MAX, resolved_path, NULL);
   return resolved_path;
 }
+
+#undef stat
+#define stat _stat64
 #else
 #include <dlfcn.h>
 #endif
@@ -188,6 +192,13 @@ find_file_check(mrb_state *mrb, mrb_value path, mrb_value fname, mrb_value ext)
     return mrb_nil_value();
   }
   debug("fpath: %s\n", fpath);
+
+  {
+    struct stat st;
+    if (stat(fpath, &st) || S_ISDIR(st.st_mode)) {
+      return mrb_nil_value();
+    }
+  }
 
   fp = fopen(fpath, "r");
   if (fp == NULL) {

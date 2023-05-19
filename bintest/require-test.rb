@@ -38,4 +38,5 @@ assert "load" do
 
   assert_mruby_require /\(LoadError\)$/, %(load "testfiles/minimal") # because it does not complement the extensions
   assert_mruby_require /\(LoadError\)$/, %(load "testfiles/notexist.rb")
+  assert_mruby_require /\(LoadError\)$/, %(load "")
 end
