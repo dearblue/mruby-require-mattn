@@ -73,6 +73,7 @@ MRuby::Gem::Specification.new('mruby-require') do |spec|
   spec.license = 'MIT'
   spec.authors = 'mattn'
   spec.add_test_dependency 'mruby-bin-mruby', core: 'mruby-bin-mruby'
+  spec.add_test_dependency 'mruby-fiber', core: 'mruby-fiber'
   spec.add_test_dependency 'mruby-metaprog', core: 'mruby-metaprog'
 
   ENV["MRUBY_REQUIRE"] = ""
