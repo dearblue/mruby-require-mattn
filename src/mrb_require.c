@@ -334,41 +334,42 @@ load_mrb_file(mrb_state *mrb, mrb_value filepath)
   }
 }
 
+#if MRUBY_RELEASE_NO >= 30100
 static void
-mrb_load_irep_data(mrb_state* mrb, const uint8_t* data)
+activate_gem(mrb_state *mrb, void (*geminit)(mrb_state *mrb))
 {
-  int ai = mrb_gc_arena_save(mrb);
-  mrb_irep *irep = mrb_read_irep(mrb,data);
-  mrb_gc_arena_restore(mrb,ai);
+  geminit(mrb);
+}
+#else
+static mrb_value
+activate_gem_body(mrb_state *mrb, mrb_value ud)
+{
+  void (*geminit)(mrb_state *) = (void (*)(mrb_state *))mrb_cptr(ud);
+  geminit(mrb);
+  return mrb_nil_value();
+}
 
-  if (irep) {
-    int ai;
-    struct RProc *proc;
-
-#ifdef USE_MRUBY_OLD_BYTE_CODE
-    replace_stop_with_return(mrb, irep);
-#endif
-    proc = mrb_proc_new(mrb, irep);
-    MRB_PROC_SET_TARGET_CLASS(proc, mrb->object_class);
-
-    ai = mrb_gc_arena_save(mrb);
-    mrb_yield_with_class(mrb, mrb_obj_value(proc), 0, NULL, mrb_top_self(mrb), mrb->object_class);
-    mrb_gc_arena_restore(mrb, ai);
-  } else if (mrb->exc) {
-    // fail to load
-    mrb_exc_raise(mrb, mrb_obj_value(mrb->exc));
+static void
+activate_gem(mrb_state *mrb, void (*geminit)(mrb_state *mrb))
+{
+  if (mrb->c->ci == mrb->c->cibase) {
+    geminit(mrb);
+  } else {
+    struct RProc *proc = mrb_proc_new_cfunc(mrb, activate_gem_body);
+    int cioff = mrb->c->ci - mrb->c->cibase;
+    mrb_yield_with_class(mrb, mrb_obj_value(proc), 0, NULL, mrb_cptr_value(mrb, geminit), mrb->object_class);
+    mrb->c->ci = mrb->c->cibase + cioff;
   }
 }
+#endif
 
 static void
 load_so_file(mrb_state *mrb, mrb_value filepath)
 {
   char entry[PATH_MAX] = {0}, *ptr, *top, *tmp;
-  char entry_irep[PATH_MAX] = {0};
   typedef void (*fn_mrb_gem_init)(mrb_state *mrb);
   fn_mrb_gem_init fn;
   void * handle = dlopen(RSTRING_CSTR(mrb, filepath), RTLD_LAZY|RTLD_GLOBAL);
-  const uint8_t* data;
   if (!handle) {
     mrb_raise(mrb, E_RUNTIME_ERROR, dlerror());
   }
@@ -388,25 +389,23 @@ load_so_file(mrb_state *mrb, mrb_value filepath)
     if (*tmp == '-') *tmp = '_';
     tmp++;
   }
-  snprintf(entry, sizeof(entry)-1, "mrb_%s_gem_init", ptr);
-  snprintf(entry_irep, sizeof(entry_irep)-1, "gem_mrblib_irep_%s", ptr);
+  snprintf(entry, sizeof(entry)-1, "GENERATED_TMP_mrb_%s_gem_init", ptr);
   fn = (fn_mrb_gem_init) dlsym(handle, entry);
-  data = (const uint8_t *)dlsym(handle, entry_irep);
   free(top);
-  if (!fn && !data) {
+  if (!fn) {
       mrb_load_fail(mrb, filepath, "cannot load such file");
   }
 
   if (fn != NULL) {
+    mrb->c->ci->mid = 0;
     int ai = mrb_gc_arena_save(mrb);
-    fn(mrb);
+    activate_gem(mrb, fn);
     mrb_gc_arena_restore(mrb, ai);
+    if (mrb->exc) {
+      mrb_exc_raise(mrb, mrb_obj_value(mrb->exc));
+    }
   }
   dlerror(); // clear last error
-
-  if (data != NULL) {
-    mrb_load_irep_data(mrb, data);
-  }
 }
 
 static void
@@ -434,7 +433,7 @@ unload_so_file(mrb_state *mrb, mrb_value filepath)
     if (*tmp == '-') *tmp = '_';
     tmp++;
   }
-  snprintf(entry, sizeof(entry)-1, "mrb_%s_gem_final", ptr);
+  snprintf(entry, sizeof(entry)-1, "GENERATED_TMP_mrb_%s_gem_final", ptr);
 
   fn = (fn_mrb_gem_final) dlsym(handle, entry);
   free(top);

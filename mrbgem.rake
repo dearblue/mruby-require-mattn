@@ -80,14 +80,13 @@ MRuby::Gem::Specification.new('mruby-require') do |spec|
         if RUBY_PLATFORM.downcase =~ /mswin(?!ce)|mingw|bccwin/
           libmruby_libs += %w(msvcrt kernel32 user32 gdi32 winspool comdlg32)
           name = g.name.gsub(/-/, '_')
-          has_rb = !Dir.glob("#{g.dir}/mrblib/*.rb").empty?
-          has_c = !Dir.glob(["#{g.dir}/src/*"]).empty?
           deffile = "#{build_dir}/lib/#{g.name}.def"
           open(deffile, 'w') do |f|
             f.puts %Q[EXPORTS]
-            f.puts %Q[	gem_mrblib_irep_#{name}] if has_rb
-            f.puts %Q[	mrb_#{name}_gem_init] if has_c
-            f.puts %Q[	mrb_#{name}_gem_final] if has_c
+            if g.generate_functions
+              f.puts %Q[	GENERATED_TMP_mrb_#{name}_gem_init]
+              f.puts %Q[	GENERATED_TMP_mrb_#{name}_gem_final]
+            end
           end
         else
           deffile = ''
