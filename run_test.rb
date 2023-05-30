@@ -16,7 +16,17 @@ MRuby::Build.new do |conf|
   #conf.enable_debug
   conf.enable_test
   conf.enable_bintest
-  conf.cc.flags << ["-fPIC"] unless ENV['VisualStudioVersion'] || ENV['VSINSTALLDIR']
+  #conf.disable_presym rescue nil
+
+  unless ENV['VisualStudioVersion'] || ENV['VSINSTALLDIR']
+    conf.cc.flags << ["-fPIC"]
+    conf.cxx.flags << ["-fPIC"]
+  end
+  archiver.command = cc.command
+  archiver.archive_options = "-shared -o %{outfile} %{objs}"
+  conf.exts.library = ".so"
+
+  conf.gem core: 'mruby-print'
+  conf.gem __dir__
   conf.gembox 'default'
-  conf.gem File.dirname(File.expand_path(__FILE__))
 end

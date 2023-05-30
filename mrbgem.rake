@@ -1,3 +1,5 @@
+require "mruby/source"
+
 module MRuby
   module Gem
     class List
@@ -23,17 +25,49 @@ module MRuby
         end
       end
 
-      unless @bundled.empty?
+      unless !defined?(@bundled) || @bundled.empty?
         puts "================================================"
-          puts "     Bundled Gems:"
-          @bundled.map(&:name).each do |name|
-          puts "             #{name}"
+        puts "     Bundled Gems:"
+        @bundled.sort_by(&:name).each do |g|
+          print "             #{g.name}"
+          print " - #{g.version}" if g.version && MRuby::Gem::Version.new(g.version) > [0]
+          print " - #{g.summary}" if g.summary && !g.summary.empty?
+          puts
         end
         puts "================================================"
+        puts
       end
     end
   end
 end
+
+module MRubyRequire
+  refine Array do
+    # Move those in white_list or on which they depend before sentinel.
+    def modify_order_by_white_list(sentinel, white_list)
+      moves = white_list.map { |e| self.find_index { |g| g.name == e } }
+      moves.compact!
+      traverse_dependencies = ->(a, off) {
+        if g = self[off]
+          a << off
+          g.dependencies.each do |d|
+            traverse_dependencies.call a, self.find_index { |gg| gg.name == d[:gem] }
+          end
+        end
+      }
+      moves = moves.each_with_object([]) { |e, a| traverse_dependencies.call(a, e) }
+      moves.reject! { |e| e <= sentinel }
+      moves.uniq!
+      moves.sort!
+      moves.reverse!
+      moves.map! { |e| self.delete_at e }
+      self[sentinel, 0] = moves
+      sentinel + moves.size
+    end
+  end
+end
+
+using MRubyRequire
 
 MRuby::Gem::Specification.new('mruby-require') do |spec|
   spec.license = 'MIT'
@@ -45,42 +79,47 @@ MRuby::Gem::Specification.new('mruby-require') do |spec|
 
   is_vc = ENV['OS'] == 'Windows_NT' && cc.command =~ /^cl(\.exe)?$/
   is_mingw = ENV['OS'] == 'Windows_NT' && cc.command =~ /^(?:clang|gcc)(.*\.exe)?$/
-  top_build_dir = build_dir
-  MRuby.each_target do
-    next if @bundled
-    @bundled = []
-    next unless enable_gems?
-    top_build_dir = build_dir
+  top_build_dir = build.build_dir
+
+  if MRuby::Source::MRUBY_RELEASE_NO < 30000
+    testlib = libfile("#{build.build_dir}/mrbgems/mruby-test/mrbtest")
+  end
+
+  intercept = "mruby-require:trap#{rand 1 << 30}:#{build.name}"
+  file build.libmruby_core_static => intercept
+  file "#{build.build_dir}/mrbgems/gem_init.c" => intercept
+  task intercept => __FILE__ do |t|
+    Rake::Task[build.libmruby_core_static].prerequisites.delete intercept
+    class << t; def timestamp; Time.at(0); end; end
+
+    next unless build.enable_gems?
+    gems = build.gems
     # Only gems included AFTER the mruby-require gem during compilation are
-    # compiled as separate objects.
+    # compiled as separate objects.  However, gems included in white_list
+    # and the gems on which they depend will be incorporated into libmruby.
     gems_uniq   = gems.uniq {|x| x.name}
-	mr_position = gems_uniq.find_index {|g| g.name == "mruby-require" }
-    mr_position = -1 if mr_position.nil?
+    white_list  = ["mruby-require", "mruby-test", "mruby-bin-mrbc", "mruby-complex", "mruby-rational", "mruby-bigint"]
+    mr_position = gems_uniq.find_index {|g| g.name == "mruby-require" }
+    mr_position = gems_uniq.modify_order_by_white_list(mr_position, white_list)
+    gems.instance_eval { @ary.replace gems_uniq }
     compiled_in = gems_uniq[0..mr_position].map {|g| g.name}
-    white_list = ["mruby-require", "mruby-test", "mruby-bin-mrbc"]
-	@bundled    = gems_uniq.reject {|g| compiled_in.include?(g.name)}
-	gems.reject! {|g| !compiled_in.include?(g.name) and !white_list.include?(g.name)}
-    libmruby_libs      = MRuby.targets["host"].linker.libraries
-    libmruby_lib_paths = MRuby.targets["host"].linker.library_paths
-    gems_uniq.each do |g|
-      unless g.name == "mruby-require"
-        begin
-          g.setup
-        rescue
-        end
-        libmruby_libs      += g.linker.libraries
-        libmruby_lib_paths += g.linker.library_paths
-      end
-    end
-    @bundled.each do |g|
+    bundled = gems_uniq.reject {|g| compiled_in.include?(g.name)}
+    gems.reject! {|g| !compiled_in.include?(g.name) and !white_list.include?(g.name)}
+    libmruby_libs      = build.linker.libraries
+    libmruby_lib_paths = build.linker.library_paths
+    gems.each { |e| bundled.delete e }
+
+    libmruby_objs = Rake::Task[build.libmruby_static].prerequisites
+    bundled.each do |g|
       next if g.objs.nil? or g.objs.empty?
+      g.objs.each { |e| libmruby_objs.delete e }
       ENV["MRUBY_REQUIRE"] += "#{g.name},"
       sharedlib = "#{top_build_dir}/lib/#{g.name}.so"
       file sharedlib => g.objs do |t|
         if RUBY_PLATFORM.downcase =~ /mswin(?!ce)|mingw|bccwin/
           libmruby_libs += %w(msvcrt kernel32 user32 gdi32 winspool comdlg32)
           name = g.name.gsub(/-/, '_')
-          deffile = "#{build_dir}/lib/#{g.name}.def"
+          deffile = "#{build.build_dir}/lib/#{g.name}.def"
           open(deffile, 'w') do |f|
             f.puts %Q[EXPORTS]
             if g.generate_functions
@@ -99,25 +138,32 @@ MRuby::Gem::Specification.new('mruby-require') do |spec|
             :objs => g.objs.flatten.join(" "),
             :libs => [
                 (is_vc ? '/DEF:' : '') + deffile,
-                libfile("#{build_dir}/lib/libmruby"),
-                libfile("#{build_dir}/lib/libmruby_core"),
+                build.libfile("#{build.build_dir}/lib/libmruby"),
                 (libmruby_libs + (g.linker ? g.linker.libraries : [])).flatten.uniq.map {|l| is_vc ? "#{l}.lib" : "-l#{l}"}].flatten.join(" "),
             :flags_before_libraries => g.linker ? g.linker.flags_before_libraries.flatten.join(" ") : '',
             :flags_after_libraries => '',
         }
 
         _pp "LD", sharedlib
-        sh linker.command + ' ' + (linker.link_options % options)
+        sh build.linker.command + ' ' + (build.linker.link_options % options)
       end
 
-      file sharedlib => libfile("#{top_build_dir}/lib/libmruby")
+      file sharedlib => build.libfile("#{build.build_dir}/lib/libmruby")
       Rake::Task.tasks << sharedlib
+      file testlib => sharedlib if testlib
     end
-    libmruby.flatten!.reject! do |l|
-      @bundled.reject {|g| l.index(g.name) == nil}.size > 0
+    build.libmruby.flatten!.reject! do |l|
+      bundled.reject {|g| l.index(g.name) == nil}.size > 0
     end
-    cc.include_paths.reject! do |l|
-      @bundled.reject {|g| l.index(g.name) == nil}.size > 0
+    build.cc.include_paths.reject! do |l|
+      bundled.reject {|g| l.index(g.name) == nil}.size > 0
+    end
+    bundled = build.instance_eval { @bundled = bundled }
+  end
+
+  if testlib
+    file testlib => intercept do |t|
+      t.prerequisites.delete intercept
     end
   end
 
