@@ -22,11 +22,17 @@ MRuby::Build.new do |conf|
     conf.cc.flags << ["-fPIC"]
     conf.cxx.flags << ["-fPIC"]
   end
-  archiver.command = cc.command
-  archiver.archive_options = "-shared -o %{outfile} %{objs}"
-  conf.exts.library = ".so"
 
-  conf.gem core: 'mruby-print'
-  conf.gem __dir__
-  conf.gembox 'default'
+  if ENV['OS'] == 'Windows_NT'
+    conf.gembox 'default'
+    conf.gem __dir__
+  else
+    archiver.command = cc.command
+    archiver.archive_options = "-shared -o %{outfile} %{objs}"
+    conf.exts.library = ".so"
+
+    conf.gem core: 'mruby-print'
+    conf.gem __dir__
+    conf.gembox 'default'
+  end
 end
