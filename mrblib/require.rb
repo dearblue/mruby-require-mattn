@@ -1,12 +1,14 @@
 # Older than mruby-3.0.0, top-level local variables are destroyed,
 # causing problems with `Kernel#require` and `Kernel#load`.
 # To deal with this, wrap the whole thing in a proc and apply by `.call` immediately.
--> {
+->(&loader) {
+  # The loader variable is replaced by __require_initialize_epilogue__.
+
   loading_path = []
   runner = ->(lib, path) { instance_eval(&lib) }
 
   Kernel.define_method :require, &->(path) {
-    lib, path = Kernel.__require_load_library(path, true, nil)
+    lib, path = loader.call(path, true, nil)
     if lib.kind_of?(Proc)
       return false if loading_path.include?(path)
 
@@ -34,8 +36,10 @@
       wrap = Module.new
     end
 
-    lib, path = Kernel.__require_load_library(path, false, wrap)
+    lib, path = loader.call(path, false, wrap)
     runner.call(lib, nil)
     true
   }
+
+  __require_initialize_epilogue__
 }.call

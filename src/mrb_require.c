@@ -345,10 +345,18 @@ activate_gem(mrb_state *mrb, void (*geminit)(mrb_state *mrb))
 }
 #else
 static mrb_value
-activate_gem_body(mrb_state *mrb, mrb_value ud)
+activate_gem_body2(mrb_state *mrb, mrb_value ud)
 {
   void (*geminit)(mrb_state *) = (void (*)(mrb_state *))mrb_cptr(ud);
   geminit(mrb);
+  return mrb_nil_value();
+}
+
+static mrb_value
+activate_gem_body1(mrb_state *mrb, mrb_value ud)
+{
+  struct RProc *proc = mrb_proc_new_cfunc(mrb, activate_gem_body2);
+  mrb_yield_with_class(mrb, mrb_obj_value(proc), 0, NULL, ud, mrb->object_class);
   return mrb_nil_value();
 }
 
@@ -358,7 +366,7 @@ activate_gem(mrb_state *mrb, void (*geminit)(mrb_state *mrb))
   if (mrb->c->ci == mrb->c->cibase) {
     geminit(mrb);
   } else {
-    struct RProc *proc = mrb_proc_new_cfunc(mrb, activate_gem_body);
+    struct RProc *proc = mrb_proc_new_cfunc(mrb, activate_gem_body1);
     int cioff = mrb->c->ci - mrb->c->cibase;
     mrb_yield_with_class(mrb, mrb_obj_value(proc), 0, NULL, mrb_cptr_value(mrb, geminit), mrb->object_class);
     mrb->c->ci = mrb->c->cibase + cioff;
@@ -584,22 +592,31 @@ mrb_load_error_path(mrb_state *mrb, mrb_value self)
   return mrb_iv_get(mrb, self, mrb_intern_lit(mrb, "path"));
 }
 
-void
-mrb_mruby_require_gem_init(mrb_state* mrb)
+#if MRUBY_RELEASE_NO >= 30000
+# define CI_STACK(ci) ((ci)->stack)
+#else
+# define CI_STACK(ci) ((ci)[1].stackent)
+#endif
+
+static void
+replace_loader_object(mrb_state *mrb)
+{
+  const mrb_callinfo *ci = mrb->c->ci - 1;
+  if (ci < mrb->c->cibase || !ci->proc || MRB_PROC_CFUNC_P(ci->proc) || ci->proc->body.irep->nlocals < 4) {
+    mrb_raise(mrb, E_RUNTIME_ERROR, "wrong caller");
+  }
+
+  CI_STACK(ci)[1] = mrb_obj_value(mrb_proc_new_cfunc(mrb, require_load_library));
+}
+
+static mrb_value
+require_initialize_epilogue(mrb_state *mrb, mrb_value self)
 {
   int ai = mrb_gc_arena_save(mrb);
   char *env;
-  struct RClass *krn;
-  struct RClass *load_error;
-  krn = mrb->kernel_module;
 
-  mrb_define_class_method(mrb, krn, "__require_load_library", require_load_library, MRB_ARGS_REQ(2));
-
-  load_error = mrb_define_class(mrb, "LoadError", E_SCRIPT_ERROR);
-  mrb_define_method(mrb, load_error, "path", mrb_load_error_path, MRB_ARGS_NONE());
-
-  mrb_gv_set(mrb, mrb_intern_cstr(mrb, "$:"), mrb_init_load_path(mrb));
-  mrb_gv_set(mrb, mrb_intern_cstr(mrb, "$\""), mrb_ary_new(mrb));
+  mrb_undef_method(mrb, mrb->kernel_module, "__require_initialize_epilogue__");
+  replace_loader_object(mrb);
 
   env = getenv("MRUBY_REQUIRE");
   if (env != NULL) {
@@ -622,6 +639,24 @@ mrb_mruby_require_gem_init(mrb_state* mrb)
       i += len;
     }
   }
+
+  return mrb_nil_value();
+}
+
+void
+mrb_mruby_require_gem_init(mrb_state* mrb)
+{
+  struct RClass *krn;
+  struct RClass *load_error;
+  krn = mrb->kernel_module;
+
+  mrb_define_method(mrb, krn, "__require_initialize_epilogue__", require_initialize_epilogue, MRB_ARGS_NONE());
+
+  load_error = mrb_define_class(mrb, "LoadError", E_SCRIPT_ERROR);
+  mrb_define_method(mrb, load_error, "path", mrb_load_error_path, MRB_ARGS_NONE());
+
+  mrb_gv_set(mrb, mrb_intern_cstr(mrb, "$:"), mrb_init_load_path(mrb));
+  mrb_gv_set(mrb, mrb_intern_cstr(mrb, "$\""), mrb_ary_new(mrb));
 }
 
 void
